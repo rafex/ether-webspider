@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-    "smolagents>=1.10,<2.0",
+    "smolagents[mcp]>=1.10,<2.0",
     "mcp>=1.2,<2.0",
     "ether-websearch",
 ]

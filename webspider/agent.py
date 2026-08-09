@@ -3,7 +3,7 @@
 Usage:
     from webspider.agent import run_mission, resume_mission
 
-    result = run_mission(mission, state_ref, mcp_tools_context)
+    result = run_mission(mission, mcp_tools, model)
 """
 
 from __future__ import annotations
@@ -14,8 +14,7 @@ from typing import Any
 
 from webspider.capabilities import get_capabilities_tools
 from webspider.checkpoint import (
-    create_load_checkpoint_tool,
-    create_save_checkpoint_tool,
+    create_state_tools,
     create_step_callback,
     load_checkpoint,
     load_memory,
@@ -49,9 +48,8 @@ def _get_agent_tools(mcp_tools: list, mission_id: str, state_ref: dict) -> dict:
         if name:
             tools[name] = tool
 
-    # Local tools
-    tools["save_checkpoint"] = create_save_checkpoint_tool(mission_id, state_ref)
-    tools["load_checkpoint"] = create_load_checkpoint_tool(mission_id, state_ref)
+    # State management tools (mutate shared state_ref)
+    tools.update(create_state_tools(mission_id, state_ref))
 
     # Capability tools
     for cap_tool in get_capabilities_tools():
@@ -101,12 +99,13 @@ def run_mission(
 
     state_ref = _build_state_ref(mission)
 
-    tools_dict = {}
+    tools_dict: dict = {}
     if mcp_tools is not None:
         tools_dict = _get_agent_tools(mcp_tools, mission_id, state_ref)
 
-    step_callback = create_step_callback(mission_id)
     prompt = build_prompt(mission)
+
+    step_callback = create_step_callback(mission_id)
 
     agent = CodeAgent(
         tools=tools_dict,
@@ -161,7 +160,7 @@ def resume_mission(
     Raises:
         ValueError: If the checkpoint does not exist.
     """
-    from smolagents import AgentMemory, CodeAgent
+    from smolagents import CodeAgent
 
     state = load_checkpoint(mission_id)
     if state is None:
@@ -178,36 +177,30 @@ def resume_mission(
 
     state_ref = dict(state)
 
-    tools_dict = {}
+    tools_dict: dict = {}
     if mcp_tools is not None:
         tools_dict = _get_agent_tools(mcp_tools, mission_id, state_ref)
 
-    step_callback = create_step_callback(mission_id)
     prompt = build_resume_prompt(mission, state)
-
     memory_steps = load_memory(mission_id)
+    remaining_steps = max(1, mission.get("max_steps", 30) - state.get("step", 0))
+
+    step_callback = create_step_callback(mission_id)
 
     agent = CodeAgent(
         tools=tools_dict,
         model=model,
-        max_steps=mission.get("max_steps", 30) - state.get("step", 0),
+        max_steps=remaining_steps,
         verbosity_level=2,
         step_callbacks=[step_callback],
     )
 
+    # Rebuild memory from saved steps (best-effort)
     if memory_steps:
-        agent.memory = AgentMemory()
-        for step_dict in memory_steps:
-            try:
-                from smolagents import ActionStep
-
-                step = ActionStep.from_dict(step_dict)
-                agent.memory.steps.append(step)
-            except Exception:
-                pass
+        _restore_memory(agent, memory_steps)
 
     try:
-        result = agent.run(prompt, reset=False)
+        result = agent.run(prompt, reset=len(memory_steps) == 0)
 
         save_checkpoint(mission_id, dict(state_ref))
 
@@ -231,3 +224,49 @@ def resume_mission(
             "visited_count": len(state_ref.get("visited", [])),
             "checkpoint_dir": os.path.join("checkpoints", mission_id),
         }
+
+
+def _restore_memory(agent: Any, memory_steps: list[dict]) -> None:
+    """Best-effort restore of agent memory from saved step dicts.
+
+    Reconstructs smolagents memory objects from serialized dicts.
+    Failures are silently skipped; state tools provide the durable data.
+    """
+    from smolagents import AgentMemory
+    from smolagents.memory import ActionStep, TaskStep
+
+    system_prompt = getattr(agent.memory, "system_prompt", None)
+    if system_prompt is not None:
+        system_prompt = system_prompt.system_prompt
+    # Default from CodeAgent
+    original_steps = list(agent.memory.steps) if agent.memory.steps else []
+
+    try:
+        agent.memory = AgentMemory(system_prompt=system_prompt or "")
+    except Exception:
+        return
+
+    for step_dict in memory_steps:
+        if isinstance(step_dict, dict) and step_dict.get("error") == "serialization_failed":
+            continue
+
+        try:
+            if "task" in step_dict and "step_number" not in step_dict:
+                agent.memory.steps.append(TaskStep(task=str(step_dict.get("task", ""))))
+            elif isinstance(step_dict, dict):
+                agent.memory.steps.append(
+                    ActionStep(
+                        step_number=step_dict.get("step_number", 0),
+                        observations=step_dict.get("observations", ""),
+                        code_action=step_dict.get("code_action"),
+                        model_output=step_dict.get("model_output"),
+                        action_output=step_dict.get("action_output"),
+                        error=None,
+                    )
+                )
+        except Exception:
+            continue
+
+    # Ensure at least the original system prompt step is present
+    if not agent.memory.steps and original_steps:
+        agent.memory.steps = original_steps

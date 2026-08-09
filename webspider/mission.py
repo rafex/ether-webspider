@@ -108,23 +108,27 @@ You have these web tools available:
 - search_news(query, ...) — search news
 - navigate_webpage(url, ...) — interactive navigation with recipes
 - scrape_social_media(platform, query, ...) — search social media
-- save_checkpoint(reason) — persist current mission state
-- load_checkpoint() — restore from last checkpoint
-- request_capability(name, description, use_case) — request a missing tool
 
-STATE MANAGEMENT:
-- Keep track of visited URLs, the frontier (URLs to explore next), and findings.
-- After exploring each URL, call save_checkpoint with a brief reason.
-- The current state is available in the variable `state` (dict with keys:
-  visited, frontier, findings, step).
+STATE TOOLS (use these to track your progress):
+- add_finding(url, type, confidence, notes) — record a discovery (login, api, rest, soap, form, etc.)
+- mark_visited(url) — mark a URL as already explored
+- add_to_frontier(url, priority, reason) — add a URL to the exploration queue with priority 0.0-1.0
+- state_summary() — get a JSON summary of current state (visited, frontier, findings)
+- save_checkpoint(reason) — persist current state to disk for resume
+- load_checkpoint() — restore state from the last checkpoint
+- request_capability(name, description, use_case) — request a missing tool from ether-websearch
 
 STRATEGY:
-1. Start by exploring the START URL with spider_webpage (depth=1).
-2. Examine results: links, endpoints found, page titles.
-3. For each finding, evaluate if it matches the GOAL.
-4. If promising URLs are found, fetch them individually to verify.
-5. Prioritize URLs whose paths or surrounding text match the goal.
-6. Continue until the goal is found OR {max_steps} steps are reached.
+1. Start by calling `spider_webpage` on the START URL with depth=1. Call `mark_visited`.
+2. Examine the results: links found, endpoints discovered, page content.
+3. For each finding that seems relevant to the GOAL, call `add_finding`.
+4. For each promising internal link, call `add_to_frontier` with a priority score:
+   - 0.9-1.0: URL or text strongly matches the goal
+   - 0.5-0.8: moderately relevant
+   - 0.1-0.4: possibly relevant
+5. After exploring each URL, call `save_checkpoint` with a brief reason.
+6. Use `state_summary()` to check your progress and pick the next URL to explore.
+7. Continue until the goal is found OR {max_steps} steps are reached.
 
 REPORT:
 When finished, print a summary with:
@@ -132,7 +136,6 @@ When finished, print a summary with:
 - Findings: list of discovered URLs with their type and relevance
 - Steps taken: total
 - URLs visited: count
-- Frontier remaining: count of unexplored URLs
 
 Limit your exploration to {max_steps} steps maximum.
 """
@@ -156,7 +159,7 @@ def build_resume_prompt(mission: dict[str, Any], state: dict) -> str:
     findings_summary = ""
     if state.get("findings"):
         findings_summary = "\nFindings so far:\n"
-        for f in state["findings"][-10:]:  # last 10
+        for f in state["findings"][-10:]:
             findings_summary += f"  - {f.get('url', '?')} [{f.get('type', '?')}]\n"
 
     frontier_prioritized = ""
@@ -176,10 +179,11 @@ ORIGINAL GOAL: {mission["goal"]}
 START URL: {mission["start_url"]}
 MAX STEPS: {mission["max_steps"]}
 
-You are at step {step}. {visited_count} URLs visited, {findings_count} findings, {frontier_count} URLs in frontier.
+Current state: {visited_count} visited, {findings_count} findings, {frontier_count} in frontier.
 {findings_summary}{frontier_prioritized}
-Continue exploring from the frontier. Call load_checkpoint() first to restore the state into the `state` variable.
-Focus on the highest-priority URLs in the frontier.
+Call `load_checkpoint()` first to restore state. Then use `state_summary()` to review
+and pick the highest-priority URL from the frontier to explore next.
+Use `mark_visited`, `add_to_frontier`, `add_finding`, and `save_checkpoint` as you explore.
 If the goal is already found, report it.
 
 Limit remaining steps to {mission["max_steps"] - step}.

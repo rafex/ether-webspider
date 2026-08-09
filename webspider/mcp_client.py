@@ -53,7 +53,7 @@ def get_mcp_tools() -> Any:
         env=env,
     )
 
-    return MCPClient(server_parameters)
+    return MCPClient(server_parameters, structured_output=True)
 
 
 def _find_mcp_command() -> list[str]:

@@ -173,8 +173,8 @@ def test_build_resume_prompt() -> None:
     prompt = build_resume_prompt(mission, state)
 
     assert "step 10" in prompt
-    assert "2 URLs visited" in prompt
+    assert "2 visited" in prompt
     assert "1 findings" in prompt
-    assert "2 URLs in frontier" in prompt
+    assert "2 in frontier" in prompt
     assert "login.aspx" in prompt
     assert "priority: 0.95" in prompt

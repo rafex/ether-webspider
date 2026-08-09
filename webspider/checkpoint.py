@@ -5,14 +5,17 @@ Checkpoints are stored as JSON files under ``checkpoints/<mission_id>/``:
     memory.jsonl — serialized agent memory steps (one JSON object per line).
 
 Usage:
-    from webspider.checkpoint import save_checkpoint, load_checkpoint, create_step_callback
-
-    # As an agent tool
-    result = save_checkpoint(state_json)
+    from webspider.checkpoint import (
+        save_checkpoint, load_checkpoint, create_step_callback,
+        create_state_tools,
+    )
 
     # As a utility
     state = load_checkpoint("my_mission")
-    callback = create_step_callback("my_mission")
+    callback = create_step_callback("my_mission", agent.memory.steps)
+
+    # State tools for the agent
+    tools = create_state_tools(mission_id, state_ref)
 """
 
 from __future__ import annotations
@@ -23,11 +26,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, cast
 
-_CHECKPOINTS_DIR = os.environ.get("WEBSPIDER_CHECKPOINTS", "checkpoints")
+
+def _checkpoints_base() -> str:
+    return os.environ.get("WEBSPIDER_CHECKPOINTS", "checkpoints")
 
 
 def _mission_dir(mission_id: str) -> str:
-    return os.path.join(_CHECKPOINTS_DIR, mission_id)
+    return os.path.join(_checkpoints_base(), mission_id)
 
 
 def _ensure_dir(path: str) -> None:
@@ -77,9 +82,11 @@ def load_checkpoint(mission_id: str) -> dict | None:
 def save_memory(mission_id: str, memory_steps: list) -> str:
     """Serialize agent memory steps to JSONL.
 
+    Uses step.dict() (smolagents MemoryStep API) and falls back to repr.
+
     Args:
         mission_id: Unique identifier for this mission.
-        memory_steps: List of smolagents memory step objects (with .to_dict()).
+        memory_steps: List of smolagents memory step objects (with .dict()).
 
     Returns:
         Path to the saved memory file.
@@ -91,8 +98,13 @@ def save_memory(mission_id: str, memory_steps: list) -> str:
     with open(memory_path, "w", encoding="utf-8") as f:
         for step in memory_steps:
             try:
-                step_dict = step.to_dict() if hasattr(step, "to_dict") else step
-                f.write(json.dumps(step_dict, ensure_ascii=False) + "\n")
+                if hasattr(step, "dict"):
+                    step_dict = step.dict()
+                elif isinstance(step, dict):
+                    step_dict = step
+                else:
+                    step_dict = {"step_type": type(step).__name__, "repr": repr(step)}
+                f.write(json.dumps(step_dict, ensure_ascii=False, default=str) + "\n")
             except Exception:
                 f.write(json.dumps({"error": "serialization_failed", "step_type": type(step).__name__}) + "\n")
 
@@ -124,22 +136,23 @@ def load_memory(mission_id: str) -> list[dict]:
     return steps
 
 
-def create_step_callback(mission_id: str, memory_steps: list | None = None) -> Callable:
+def create_step_callback(mission_id: str) -> Callable:
     """Create a step callback that persists memory after each agent step.
 
-    The returned callback can be passed to CodeAgent's step_callbacks parameter.
+    smolagents calls step callbacks as ``callback(memory_step, agent=self)``
+    (see agents.py:_finalize_step). We use the ``agent`` kwarg to access
+    ``agent.memory.steps`` directly.
 
     Args:
         mission_id: Unique identifier for the mission.
-        memory_steps: Reference to the agent's memory.steps list (mutable).
 
     Returns:
         A callable suitable for use as a step callback.
     """
 
-    def _on_step(step_data: Any = None) -> None:
-        if memory_steps is not None and memory_steps:
-            save_memory(mission_id, memory_steps)
+    def _on_step(memory_step: Any = None, agent: Any = None) -> None:
+        if agent is not None and hasattr(agent, "memory") and agent.memory.steps:
+            save_memory(mission_id, agent.memory.steps)
 
     return _on_step
 
@@ -147,26 +160,92 @@ def create_step_callback(mission_id: str, memory_steps: list | None = None) -> C
 # ── State tools for the agent ──────────────────────────────────────────────────
 
 
-def create_save_checkpoint_tool(mission_id: str, state_ref: dict) -> Callable:
-    """Create a save_checkpoint tool for the agent to call.
+def create_state_tools(mission_id: str, state_ref: dict) -> dict[str, Callable]:
+    """Create the full set of state management tools for the agent.
 
-    The tool serializes the current state_ref dict to the checkpoint file.
-    The agent should update state_ref before calling this.
+    Tools mutate the shared ``state_ref`` dict so the agent can track
+    visited URLs, the frontier, and findings across steps.
 
     Args:
         mission_id: Unique identifier for the mission.
-        state_ref: Mutable dict reference the agent populates with state.
+        state_ref: Mutable dict (mission, step, visited, frontier, findings).
 
     Returns:
-        A callable tool function.
+        Dict of tool_name → callable.
     """
+    return {
+        "add_finding": _create_add_finding(state_ref),
+        "mark_visited": _create_mark_visited(state_ref),
+        "add_to_frontier": _create_add_to_frontier(state_ref),
+        "state_summary": _create_state_summary(state_ref),
+        "save_checkpoint": _create_save_checkpoint(mission_id, state_ref),
+        "load_checkpoint": _create_load_checkpoint(mission_id, state_ref),
+    }
 
+
+def _create_add_finding(state_ref: dict) -> Callable:
+    def _add_finding(url: str, finding_type: str = "unknown", confidence: float = 0.5, notes: str = "") -> str:
+        """Register a discovered finding."""
+        for f in state_ref.get("findings", []):
+            if f.get("url") == url:
+                f.update(type=finding_type, confidence=confidence, notes=notes)
+                return f"Updated finding: {url} [{finding_type}]"
+
+        state_ref.setdefault("findings", []).append(
+            {"url": url, "type": finding_type, "confidence": confidence, "notes": notes}
+        )
+        return f"Finding added: {url} [{finding_type}]"
+
+    return _add_finding
+
+
+def _create_mark_visited(state_ref: dict) -> Callable:
+    def _mark_visited(url: str) -> str:
+        """Mark a URL as visited (no-op if already visited)."""
+        visited = state_ref.setdefault("visited", [])
+        if url not in visited:
+            visited.append(url)
+            return f"Marked visited: {url}"
+        return f"Already visited: {url}"
+
+    return _mark_visited
+
+
+def _create_add_to_frontier(state_ref: dict) -> Callable:
+    def _add_to_frontier(url: str, priority: float = 0.5, reason: str = "") -> str:
+        """Add a URL to the exploration frontier with a priority score."""
+        frontier = state_ref.setdefault("frontier", [])
+        for item in frontier:
+            if item.get("url") == url:
+                item["priority"] = max(item.get("priority", 0), priority)
+                item["reason"] = reason or item.get("reason", "")
+                return f"Updated frontier priority for {url}"
+
+        frontier.append({"url": url, "priority": priority, "reason": reason})
+        return f"Added to frontier: {url} (priority {priority:.2f})"
+
+    return _add_to_frontier
+
+
+def _create_state_summary(state_ref: dict) -> Callable:
+    def _state_summary() -> str:
+        """Return a compact JSON summary of current exploration state."""
+        summary = {
+            "step": state_ref.get("step", 0),
+            "visited_count": len(state_ref.get("visited", [])),
+            "frontier_count": len(state_ref.get("frontier", [])),
+            "findings_count": len(state_ref.get("findings", [])),
+            "top_findings": state_ref.get("findings", [])[-5:],
+            "top_frontier": sorted(state_ref.get("frontier", []), key=lambda x: x.get("priority", 0), reverse=True)[:5],
+        }
+        return json.dumps(summary, ensure_ascii=False, indent=2)
+
+    return _state_summary
+
+
+def _create_save_checkpoint(mission_id: str, state_ref: dict) -> Callable:
     def _save_checkpoint(reason: str = "") -> str:
-        """Save current mission state to checkpoint.
-
-        Args:
-            reason: Optional description of why the checkpoint is being saved.
-        """
+        """Save current mission state to checkpoint."""
         state_ref["checkpoint_reason"] = reason
         path = save_checkpoint(mission_id, dict(state_ref))
         return f"Checkpoint saved to {path}"
@@ -174,19 +253,7 @@ def create_save_checkpoint_tool(mission_id: str, state_ref: dict) -> Callable:
     return _save_checkpoint
 
 
-def create_load_checkpoint_tool(mission_id: str, state_ref: dict) -> Callable:
-    """Create a load_checkpoint tool for the agent to call.
-
-    Loads the checkpoint state into state_ref.
-
-    Args:
-        mission_id: Unique identifier for the mission.
-        state_ref: Mutable dict reference to populate with loaded state.
-
-    Returns:
-        A callable tool function.
-    """
-
+def _create_load_checkpoint(mission_id: str, state_ref: dict) -> Callable:
     def _load_checkpoint() -> str:
         """Load mission state from the last checkpoint."""
         loaded = load_checkpoint(mission_id)
@@ -197,6 +264,10 @@ def create_load_checkpoint_tool(mission_id: str, state_ref: dict) -> Callable:
         for key, value in loaded.items():
             if key not in _excluded:
                 state_ref[key] = value
-        return f"Checkpoint loaded: step {loaded.get('step', 0)}, {len(loaded.get('visited', []))} URLs visited, {len(loaded.get('findings', []))} findings."
+        return (
+            f"Checkpoint loaded: step {loaded.get('step', 0)}, "
+            f"{len(loaded.get('visited', []))} visited, "
+            f"{len(loaded.get('findings', []))} findings."
+        )
 
     return _load_checkpoint
