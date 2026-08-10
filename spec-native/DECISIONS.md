@@ -37,6 +37,33 @@ Registro de decisiones persistentes del proyecto.
     modelo con buena capacidad de generacion de codigo.
 - **Reemplaza:** none
 
+### DEC-0005 — Descubrimiento de endpoints centrado en requests
+
+- **Fecha:** 2026-08-09
+- **Estado:** accepted
+- **Contexto:** El crawling de URLs no conserva suficiente evidencia para reconstruir APIs reales: faltaban tráfico XHR/fetch, métodos, payloads, respuestas, artefactos de contrato y protocolos no REST.
+- **Decision:** `ether-websearch` ejecuta observación y probing; `ether-webspider` orquesta la misión y persiste findings estructurados. La exploración activa es opt-in, requiere allowlist y confirmación, y toda persistencia redacciona credenciales, cookies, tokens y storage state.
+- **Consecuencias:** Se pueden mapear requests dinámicos, formularios, OpenAPI/WSDL/GraphQL/proto y gRPC/gRPC-Web sin convertir WebSpider en un scraper de contenido. Replay y reflexión quedan acotados por política explícita.
+- **Reemplaza:** none
+
+### DEC-0006 — Supervisor único para autonomía y takeover humano
+
+- **Fecha:** 2026-08-09
+- **Estado:** accepted
+- **Contexto:** El usuario debe poder observar un navegador visible, intervenir
+  durante un flujo autenticado y devolver el control al agente sin duplicar
+  la lógica de misión.
+- **Decision:** `MissionSupervisor` es el backend común de `run`, Web UI,
+  WebSocket y REPL. Ejecuta unidades de un step, conserva la sesión de
+  navegador por `session_id`, y aplica pause/resume/takeover/release. El modo
+  autónomo es el default; el modo activo y las mutaciones requieren allowlist,
+  confirmación y límites explícitos.
+- **Consecuencias:** La intervención humana y la ejecución desatendida
+  comparten estado, findings, requests y checkpoints. Safari real queda
+  condicionado a SafariDriver/macOS; Playwright WebKit es la alternativa
+  multiplataforma.
+- **Reemplaza:** none
+
 ### DEC-0002 — Checkpoints hibridos: state tools JSON + memoria serializada
 
 - **Fecha:** 2026-08-07
@@ -104,4 +131,22 @@ Registro de decisiones persistentes del proyecto.
     OpenAI (calidad), HF (balance). Configuracion simple via .env.
   - Limitaciones: los modelos locales pequenos (Ollama 7B) pueden no
     generar codigo Python correcto — documentar modelos recomendados.
+- **Reemplaza:** none
+
+### DEC-0007 — Auditoría de ether-rules gobernada desde WebSpider
+
+- **Fecha:** 2026-08-09
+- **Estado:** accepted
+- **Contexto:** `ether-my-best-practice` es el estándar consumido por WebSpider,
+  pero actualmente no contiene una estructura SpecNative propia. La auditoría
+  necesita quedar versionada, trazable y disponible para los agentes que usan
+  el estándar.
+- **Decision:** Mantener la SPEC y las tareas de cumplimiento de ether-rules en
+  `ether-webspider/spec-native/`, con un vínculo cross-repo explícito al
+  repositorio mantenedor. Las correcciones se ejecutarán por fases y se
+  distinguirán las reglas del mantenedor de las reglas para consumidores.
+- **Consecuencias:** WebSpider conserva la fuente de contexto y continuidad;
+  ether-rules sigue siendo la fuente de verdad del contenido de las reglas.
+  Las tareas que modifiquen ether-rules deberán registrar evidencia en su
+  propio repositorio y reflejar el resultado aquí.
 - **Reemplaza:** none

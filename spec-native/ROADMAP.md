@@ -4,8 +4,13 @@
 
 ### Iniciativas activas
 
-- **`webspider-agent`** — Agente spider con CodeAgent + MCP +
-  checkpoints + resume + solicitud de capacidades.
+- **`ether-rules-compliance`** — Auditoría y evolución por fases del
+  estándar `ether-my-best-practice`, su MCP y sus templates.
+
+### Completadas recientemente
+
+- **`webspider-agent`** — Agente spider con CodeAgent + MCP + checkpoints,
+  navegador visible, supervisor y takeover humano.
 
 ## Despues
 

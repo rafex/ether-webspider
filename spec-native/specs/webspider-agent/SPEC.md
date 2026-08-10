@@ -1,5 +1,19 @@
 # SPEC.md — Iniciativa webspider-agent
 
+```toml
+artifact_type = "spec"
+id = "SPEC-WEBSPIDER-0001"
+state = "done"
+owner = "team"
+created_at = "2026-08-07"
+updated_at = "2026-08-09"
+replaces = "none"
+related_tasks = ["TASK-WEBSPIDER-0001", "TASK-WEBSPIDER-0002", "TASK-WEBSPIDER-0003", "TASK-WEBSPIDER-0004", "TASK-WEBSPIDER-0005", "TASK-WEBSPIDER-0006", "TASK-WEBSPIDER-0007", "TASK-WEBSPIDER-0008", "TASK-WEBSPIDER-0009", "TASK-WEBSPIDER-0010", "TASK-WEBSPIDER-0011"]
+related_decisions = ["DEC-0001", "DEC-0002", "DEC-0003", "DEC-0004", "DEC-0005", "DEC-0006"]
+artifacts = ["webspider/**", "tests/**", "spec-native/**"]
+validation = ["pytest tests/ -v", "ruff check webspider/ tests/", "mypy webspider/"]
+```
+
 - **Estado:** done
 - **Owner:** team
 - **Inicio:** 2026-08-07

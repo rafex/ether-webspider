@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "specnative": {
+      "command": "/Users/rafex/repository/github/rafex/ether/ether-webspider/.specnative/.venv/bin/python3",
+      "args": [
+        "/Users/rafex/repository/github/rafex/ether/ether-webspider/.specnative/specnative_mcp.py",
+        "--repo",
+        "/Users/rafex/repository/github/rafex/ether/ether-webspider"
+      ]
+    }
+  }
+}

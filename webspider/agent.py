@@ -18,10 +18,65 @@ from webspider.checkpoint import (
     create_step_callback,
     load_checkpoint,
     load_memory,
+    redact_sensitive_data,
     save_checkpoint,
 )
 from webspider.config import get_model
 from webspider.mission import build_prompt, build_resume_prompt
+from webspider.tool_adapter import STATE_TOOL_SCHEMAS, as_agent_tool
+
+_ENDPOINT_CAPABILITIES = {
+    "capture_browser_network",
+    "extract_api_artifacts",
+    "inspect_http_endpoint",
+    "replay_request",
+    "browser_session",
+    "inspect_grpc_endpoint",
+}
+
+
+def _validate_mission(mission: dict[str, Any]) -> None:
+    """Enforce execution safety before creating an agent or contacting MCP."""
+    mode = mission.get("discovery_mode", mission.get("mode", "passive"))
+    if mode not in {"passive", "probe", "active"}:
+        raise ValueError("discovery_mode must be passive, probe, or active")
+    if mode == "active" and (not mission.get("allowed_domains") or not mission.get("active_confirmed")):
+        raise ValueError("active discovery requires allowed_domains and active_confirmed=true")
+    browser = mission.get("browser", {})
+    session = mission.get("session", {})
+    if browser.get("attach") and not browser.get("session_id") and not session.get("attach_endpoint"):
+        raise ValueError("attach requires browser.session_id or session.attach_endpoint")
+    if int(mission.get("max_steps", 30)) < 1 or int(mission.get("max_requests", 200)) < 1:
+        raise ValueError("max_steps and max_requests must be positive")
+
+
+def _require_mcp_capabilities(mcp_tools: list) -> None:
+    names = {getattr(tool, "name", "") for tool in mcp_tools}
+    missing = sorted(_ENDPOINT_CAPABILITIES - names)
+    if missing:
+        raise RuntimeError(f"ether-websearch MCP is missing required capabilities: {', '.join(missing)}")
+
+
+def _result_from_state(
+    mission_id: str, mission: dict[str, Any], state_ref: dict, *, ok: bool, result: str = "", error: str = ""
+) -> dict:
+    """Build a consistent structured mission result."""
+    output = {
+        "ok": ok,
+        "mission_id": mission_id,
+        "goal": mission.get("goal", ""),
+        "result": result,
+        "findings": redact_sensitive_data(state_ref.get("findings", [])),
+        "requests": redact_sensitive_data(state_ref.get("requests", [])),
+        "artifacts": redact_sensitive_data(state_ref.get("artifacts", [])),
+        "steps": state_ref.get("step", 0),
+        "requests_used": state_ref.get("requests_used", 0),
+        "visited_count": len(state_ref.get("visited", [])),
+        "checkpoint_dir": os.path.join("checkpoints", mission_id),
+    }
+    if error:
+        output["error"] = error
+    return output
 
 
 def _build_state_ref(mission: dict) -> dict:
@@ -32,30 +87,67 @@ def _build_state_ref(mission: dict) -> dict:
         "visited": [],
         "frontier": [],
         "findings": [],
+        "requests": [],
+        "artifacts": [],
+        "requests_used": 0,
+        "tool_calls": 0,
+        "coverage": {},
     }
 
 
-def _get_agent_tools(mcp_tools: list, mission_id: str, state_ref: dict) -> dict:
+def _get_agent_tools(mcp_tools: list, mission_id: str, state_ref: dict, on_finding: Any = None) -> dict:
     """Assemble all tools for the agent.
 
     Returns a dict of name -> tool callable.
     """
     tools: dict[str, Any] = {}
 
+    def _persist_state() -> None:
+        save_checkpoint(mission_id, state_ref)
+
     # MCP tools from ether-websearch
     for tool in mcp_tools:
         name = getattr(tool, "name", None)
         if name:
-            tools[name] = tool
+
+            def _call_mcp(bound_tool: Any = tool, **kwargs: Any) -> Any:
+                return bound_tool(**kwargs)
+
+            inputs = getattr(tool, "inputs", {}) or {}
+            description = str(getattr(tool, "description", name))
+            tools[name] = as_agent_tool(
+                name,
+                _call_mcp,
+                inputs,
+                description,
+                after_call=_persist_state,
+            )
 
     # State management tools (mutate shared state_ref)
-    tools.update(create_state_tools(mission_id, state_ref))
+    state_tools = create_state_tools(mission_id, state_ref, on_finding=on_finding)
+    for name, function in state_tools.items():
+        inputs, description = STATE_TOOL_SCHEMAS[name]
+        tools[name] = as_agent_tool(
+            name,
+            function,
+            inputs,
+            description,
+            after_call=_persist_state,
+        )
 
     # Capability tools
-    for cap_tool in get_capabilities_tools():
+    tool_names = sorted(name for name in tools if name not in {"request_capability"})
+    for cap_tool in get_capabilities_tools(tool_names):
         name = getattr(cap_tool, "__name__", None)
         if name:
-            tools[name] = cap_tool
+            inputs, description = STATE_TOOL_SCHEMAS.get(name, ({}, name))
+            tools[name] = as_agent_tool(
+                name,
+                cap_tool,
+                inputs,
+                description,
+                after_call=_persist_state,
+            )
 
     return tools
 
@@ -75,6 +167,7 @@ def run_mission(
     model: Any = None,
     mission_id: str | None = None,
     on_finding: Any = None,
+    credentials: dict[str, str] | None = None,
 ) -> dict:
     """Run a spider mission from scratch.
 
@@ -94,21 +187,25 @@ def run_mission(
     if mission_id is None:
         mission_id = _generate_mission_id(mission["goal"])
 
+    _validate_mission(mission)
+
     if model is None:
         model = get_model()
 
     state_ref = _build_state_ref(mission)
+    state_ref["runtime_credentials"] = dict(credentials or {})
 
     tools_dict: dict = {}
     if mcp_tools is not None:
-        tools_dict = _get_agent_tools(mcp_tools, mission_id, state_ref)
+        _require_mcp_capabilities(mcp_tools)
+    tools_dict = _get_agent_tools(mcp_tools or [], mission_id, state_ref, on_finding=on_finding)
 
     prompt = build_prompt(mission)
 
-    step_callback = create_step_callback(mission_id)
+    step_callback = create_step_callback(mission_id, state_ref)
 
     agent = CodeAgent(
-        tools=tools_dict,
+        tools=list(tools_dict.values()),
         model=model,
         max_steps=mission["max_steps"],
         verbosity_level=2,
@@ -118,25 +215,33 @@ def run_mission(
     try:
         result = agent.run(prompt)
 
-        save_checkpoint(mission_id, dict(state_ref))
+        save_checkpoint(mission_id, state_ref)
 
         return {
             "ok": True,
             "mission_id": mission_id,
             "goal": mission["goal"],
             "result": str(result) if result else "",
-            "findings": state_ref.get("findings", []),
+            "findings": redact_sensitive_data(state_ref.get("findings", [])),
+            "requests": redact_sensitive_data(state_ref.get("requests", [])),
+            "artifacts": redact_sensitive_data(state_ref.get("artifacts", [])),
+            "steps": state_ref.get("step", 0),
+            "requests_used": state_ref.get("requests_used", 0),
             "visited_count": len(state_ref.get("visited", [])),
             "checkpoint_dir": os.path.join("checkpoints", mission_id),
         }
     except Exception as e:
-        save_checkpoint(mission_id, dict(state_ref))
+        save_checkpoint(mission_id, state_ref)
         return {
             "ok": False,
             "mission_id": mission_id,
             "goal": mission["goal"],
             "error": str(e),
-            "findings": state_ref.get("findings", []),
+            "findings": redact_sensitive_data(state_ref.get("findings", [])),
+            "requests": redact_sensitive_data(state_ref.get("requests", [])),
+            "artifacts": redact_sensitive_data(state_ref.get("artifacts", [])),
+            "steps": state_ref.get("step", 0),
+            "requests_used": state_ref.get("requests_used", 0),
             "visited_count": len(state_ref.get("visited", [])),
             "checkpoint_dir": os.path.join("checkpoints", mission_id),
         }
@@ -146,6 +251,7 @@ def resume_mission(
     mission_id: str,
     mcp_tools: list | None = None,
     model: Any = None,
+    credentials: dict[str, str] | None = None,
 ) -> dict:
     """Resume a mission from a checkpoint.
 
@@ -175,20 +281,34 @@ def resume_mission(
     if not mission:
         raise ValueError(f"Checkpoint {mission_id!r} has no mission definition.")
 
+    _validate_mission(mission)
     state_ref = dict(state)
+    state_ref["runtime_credentials"] = dict(credentials or {})
+    for key, default in (
+        ("requests", []),
+        ("artifacts", []),
+        ("requests_used", 0),
+        ("tool_calls", 0),
+        ("coverage", {}),
+    ):
+        state_ref.setdefault(key, default)
+
+    if state_ref.get("step", 0) >= mission.get("max_steps", 30):
+        return _result_from_state(mission_id, mission, state_ref, ok=True, result="Mission already reached max_steps.")
 
     tools_dict: dict = {}
     if mcp_tools is not None:
-        tools_dict = _get_agent_tools(mcp_tools, mission_id, state_ref)
+        _require_mcp_capabilities(mcp_tools)
+    tools_dict = _get_agent_tools(mcp_tools or [], mission_id, state_ref)
 
     prompt = build_resume_prompt(mission, state)
     memory_steps = load_memory(mission_id)
     remaining_steps = max(1, mission.get("max_steps", 30) - state.get("step", 0))
 
-    step_callback = create_step_callback(mission_id)
+    step_callback = create_step_callback(mission_id, state_ref)
 
     agent = CodeAgent(
-        tools=tools_dict,
+        tools=list(tools_dict.values()),
         model=model,
         max_steps=remaining_steps,
         verbosity_level=2,
@@ -202,25 +322,33 @@ def resume_mission(
     try:
         result = agent.run(prompt, reset=len(memory_steps) == 0)
 
-        save_checkpoint(mission_id, dict(state_ref))
+        save_checkpoint(mission_id, state_ref)
 
         return {
             "ok": True,
             "mission_id": mission_id,
             "goal": mission.get("goal", ""),
             "result": str(result) if result else "",
-            "findings": state_ref.get("findings", []),
+            "findings": redact_sensitive_data(state_ref.get("findings", [])),
+            "requests": redact_sensitive_data(state_ref.get("requests", [])),
+            "artifacts": redact_sensitive_data(state_ref.get("artifacts", [])),
+            "steps": state_ref.get("step", 0),
+            "requests_used": state_ref.get("requests_used", 0),
             "visited_count": len(state_ref.get("visited", [])),
             "checkpoint_dir": os.path.join("checkpoints", mission_id),
         }
     except Exception as e:
-        save_checkpoint(mission_id, dict(state_ref))
+        save_checkpoint(mission_id, state_ref)
         return {
             "ok": False,
             "mission_id": mission_id,
             "goal": mission.get("goal", ""),
             "error": str(e),
             "findings": state_ref.get("findings", []),
+            "requests": state_ref.get("requests", []),
+            "artifacts": state_ref.get("artifacts", []),
+            "steps": state_ref.get("step", 0),
+            "requests_used": state_ref.get("requests_used", 0),
             "visited_count": len(state_ref.get("visited", [])),
             "checkpoint_dir": os.path.join("checkpoints", mission_id),
         }

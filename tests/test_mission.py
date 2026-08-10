@@ -149,6 +149,25 @@ def test_build_prompt_no_search() -> None:
     assert "can use `search_duckduckgo`" not in prompt
 
 
+def test_mission_active_requires_confirmation_and_allowlist() -> None:
+    """Active exploration cannot be enabled implicitly."""
+    from webspider.mission import mission_from_args
+
+    with pytest.raises(ValueError, match="allowed_domains"):
+        mission_from_args("Find API", "https://example.com", discovery_mode="active")
+
+    mission = mission_from_args(
+        "Find API",
+        "https://example.com",
+        discovery_mode="active",
+        allowed_domains=["example.com"],
+        active_confirmed=True,
+    )
+    assert mission["discovery_mode"] == "active"
+    assert mission["active_confirmed"] is True
+    assert "active_confirmed=true" in __import__("webspider.mission", fromlist=["build_prompt"]).build_prompt(mission)
+
+
 def test_build_resume_prompt() -> None:
     """Resume prompt includes checkpoint state summary."""
     from webspider.mission import build_resume_prompt

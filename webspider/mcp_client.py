@@ -1,6 +1,6 @@
 """webspider.mcp_client — MCP connector to ether-websearch.
 
-Loads the 15 tools from ether-websearch's MCP server via smolagents' MCPClient
+Loads the ether-websearch tools from its MCP server via smolagents' MCPClient
 stdio subprocess transport.
 
 Requires the ether-websearch REST core to be running (MCP_REST_BASE_URL).
@@ -59,9 +59,34 @@ def get_mcp_tools() -> Any:
 def _find_mcp_command() -> list[str]:
     """Find the ether-websearch-mcp entry point.
 
-    Prefers the entry point from the installed package, falls back to
-    using the sibling ether-websearch repo's venv Python.
+    Prefers the explicitly configured/local ether-websearch repository so the
+    agent consumes the intended toolkit checkout. Falls back to an installed
+    package only when no local checkout is available.
     """
+    websearch_repo = os.environ.get(
+        "ETHER_WEBSEARCH_REPO",
+        os.path.join(os.path.dirname(__file__), "..", "..", "ether-websearch"),
+    )
+    websearch_repo = os.path.abspath(websearch_repo)
+
+    local_candidates = [
+        os.path.join(websearch_repo, ".venv", "bin", "python"),
+        os.path.join(websearch_repo, ".venv", "bin", "python3"),
+    ]
+    for venv_python in local_candidates:
+        if os.path.isfile(venv_python):
+            return [venv_python, "-m", "websearch.src.mcp.mcp_server"]
+
+    # An explicit repo path is authoritative: do not silently use a different
+    # installed checkout when the requested local toolkit is unavailable.
+    if "ETHER_WEBSEARCH_REPO" in os.environ:
+        raise RuntimeError(
+            f"Cannot find ether-websearch Python environment in {websearch_repo!r}. "
+            "Expected .venv/bin/python or .venv/bin/python3."
+        )
+
+    # Fallback for users who installed ether-websearch into webspider's own
+    # environment instead of keeping the sibling repository checkout.
     try:
         result = subprocess.run(
             [sys.executable, "-m", "websearch.src.mcp.mcp_server", "--help"],
@@ -74,18 +99,8 @@ def _find_mcp_command() -> list[str]:
     except Exception:
         pass
 
-    websearch_repo = os.environ.get(
-        "ETHER_WEBSEARCH_REPO",
-        os.path.join(os.path.dirname(__file__), "..", "..", "ether-websearch"),
-    )
-    websearch_repo = os.path.abspath(websearch_repo)
-    venv_python = os.path.join(websearch_repo, ".venv", "bin", "python")
-
-    if os.path.isfile(venv_python):
-        return [venv_python, "-m", "websearch.src.mcp.mcp_server"]
-
     raise RuntimeError(
         "Cannot find ether-websearch-mcp entry point. "
-        "Ensure ether-websearch is installed or set ETHER_WEBSEARCH_REPO "
-        "to the correct path."
+        f"Expected local checkout at {websearch_repo!r} or an installed "
+        "ether-websearch package."
     )

@@ -1,0 +1,10 @@
+# SpecNative GitHub Projects export plan configuration.
+# This file is intentionally a dry-run configuration example.
+
+project_node_id = "PVT_example"
+
+[status]
+todo = "Todo"
+in_progress = "In Progress"
+blocked = "Blocked"
+done = "Done"

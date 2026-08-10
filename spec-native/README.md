@@ -23,6 +23,13 @@ Indice de navegacion para agentes.
 | `specs/` | Especificaciones por iniciativa |
 | `tasks/` | Tareas ejecutables por iniciativa |
 
+### Iniciativas actuales
+
+- [`specs/webspider-agent/SPEC.md`](specs/webspider-agent/SPEC.md) — iniciativa
+  completada del agente WebSpider.
+- [`specs/ether-rules-compliance/SPEC.md`](specs/ether-rules-compliance/SPEC.md)
+  — auditoría activa del estándar ether-rules por fases.
+
 ## Procesos
 
 | Carpeta | Contenido |

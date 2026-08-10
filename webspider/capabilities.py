@@ -12,20 +12,39 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 
 
-def get_capabilities_tools() -> list[Callable]:
+def get_capabilities_tools(tool_names: list[str] | None = None) -> list[Callable]:
     """Return capability-related tools for the agent.
 
     Returns:
         List of callable tool functions.
     """
-    return [
-        request_capability,
-    ]
+
+    def _fetch_capabilities() -> str:
+        """Return the capabilities actually registered for this agent."""
+        names = tool_names or []
+        return json.dumps(
+            {
+                "mcp_tools": names,
+                "endpoint_discovery": {
+                    "capture_browser_network": "XHR/fetch/navigation/forms",
+                    "extract_api_artifacts": "REST/SOAP/GraphQL/gRPC/OpenAPI/WSDL/proto",
+                    "inspect_http_endpoint": "HEAD/OPTIONS/GET safe probes",
+                    "replay_request": "active mode plus allowlist required",
+                    "browser_session": "storage state or guided login in memory",
+                    "inspect_grpc_endpoint": "gRPC/gRPC-Web content types and descriptors",
+                },
+            },
+            ensure_ascii=False,
+        )
+
+    _fetch_capabilities.__name__ = "fetch_capabilities"
+    return [_fetch_capabilities, request_capability]
 
 
 def _get_ether_websearch_intake_path() -> str:

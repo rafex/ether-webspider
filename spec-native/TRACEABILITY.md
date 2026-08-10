@@ -16,6 +16,16 @@ Vinculos entre artefactos del proyecto.
 | ARCHITECTURE | `ARCHITECTURE.md` | SPEC |
 | STACK | `STACK.md` | T-002 |
 
+## Iniciativa: ether-rules-compliance
+
+| Artefacto | Ubicacion | Vinculado a |
+|-----------|-----------|-------------|
+| SPEC | `specs/ether-rules-compliance/SPEC.md` | — |
+| TASKS | `tasks/ether-rules-compliance/TASKS.md` | SPEC |
+| DEC-0007 | `DECISIONS.md` | SPEC, TASKS |
+| ether-rules repository | `/Users/rafex/repository/github/rafex/ether/ether-my-best-practice` | TASKS 0001–0006 |
+| Regla 01–16 | `ether-my-best-practice/rules/` | SPEC |
+
 ## Cross-repo
 
 | Vinculo | Repo destino | Artefacto |
@@ -23,3 +33,4 @@ Vinculos entre artefactos del proyecto.
 | ether-websearch MCP server | ether-websearch | `websearch/src/mcp/mcp_server.py` |
 | Feature requests | ether-websearch | `spec-native/intake/IDEAS.md` |
 | MCP REST dependency | ether-websearch | DEC-0015, DEC-0016 (ether-websearch) |
+| ether-rules standard | ether-my-best-practice | `rules/01-build-tooling.md` … `rules/16-cd.md` |

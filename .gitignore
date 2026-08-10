@@ -45,3 +45,9 @@ htmlcov/
 
 # uv
 uv.lock
+
+# SpecNative — venv is generated; do not commit
+.specnative/.venv/
+
+# SpecNative generated exports and local runtime state
+exports/

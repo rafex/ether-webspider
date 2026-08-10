@@ -26,13 +26,30 @@ no hay trabajo activo.
 
 ## Flujo de trabajo
 
-1. Si hay sesion activa: leer `spec-native/SESSION.md`.
-2. Si es una nueva iniciativa: leer `spec-native/ROADMAP.md` y
-   `spec-native/PRODUCT.md` para entender contexto.
-3. Implementar siguiendo `spec-native/workflows/IMPLEMENTATION.md`.
-4. Actualizar tareas y estado en `spec-native/tasks/`.
-5. Registrar decisiones en `spec-native/DECISIONS.md`.
-6. Al pausar: actualizar `spec-native/SESSION.md`.
+1. Leer `AGENTS.md` y `spec-native/README.md`.
+2. Ejecutar `resume()` mediante el MCP de SpecNative y revisar
+   `spec-native/SESSION.md`.
+3. Si es una nueva iniciativa, leer `spec-native/ROADMAP.md`,
+   `spec-native/PRODUCT.md` y las decisiones relacionadas.
+4. Crear o revisar una SPEC en `spec-native/specs/`.
+5. Derivar tareas en `spec-native/tasks/` con dependencias, validación y
+   criterio de cierre observable.
+6. Implementar siguiendo `spec-native/workflows/IMPLEMENTATION.md`.
+7. Actualizar tareas mediante el MCP; una tarea `done` requiere
+   `completion_evidence`.
+8. Registrar decisiones persistentes en `spec-native/DECISIONS.md` o en
+   `spec-native/decisions/`.
+9. Ejecutar `checkpoint()` antes de pausar o cambiar de agente.
+10. Al cerrar una iniciativa, revisar criterios, actualizar
+    `spec-native/TRACEABILITY.md` y dejar `SESSION.md` consistente.
+
+## Herramientas SpecNative
+
+El servidor local está en `.specnative/specnative_mcp.py` y usa el entorno
+`.specnative/.venv/`. Los agentes deben usar sus resources y tools para
+`resume`, `status`, `validate`, `board`, `read_spec`, `update_task`,
+`checkpoint` y registro de decisiones. Los comandos comunes se generan desde
+`.specnative/commands.json` para Claude Code, OpenCode y Codex.
 
 ## Separacion semantica de documentos
 
